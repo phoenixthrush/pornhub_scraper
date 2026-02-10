@@ -63,6 +63,8 @@ def download_videos():
                         "%(id)s.%(ext)s",
                         # "--postprocessor-args",
                         # "ffmpeg:-c:v libx265 -preset veryslow",
+                        "--embed-metadata",  # somehow does not work?
+                        "--embed-thumbnail",
                         url,
                     ],
                     cwd=folder_path,

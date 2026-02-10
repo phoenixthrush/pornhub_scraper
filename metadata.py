@@ -29,6 +29,7 @@
 
 import json
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from common import cleanup_partial_downloads
@@ -75,57 +76,99 @@ def download_metadata_json():
 def convert_json_to_nfo():
     """Converting JSON metadata to NFO format"""
 
+    def _text(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (str, int, float, bool)):
+            return str(value)
+        if isinstance(value, (list, tuple)):
+            return ", ".join(_text(v) for v in value if _text(v))
+        if isinstance(value, dict):
+            for key in ("name", "title", "id"):
+                if key in value:
+                    return _text(value.get(key))
+            return ""
+        return str(value)
+
     for json_file in Path("mountpoint").glob("**/*.json"):
         if json_file.is_file():
             with open(json_file, "r", encoding="utf-8") as file:
                 data = json.load(file)
 
             # Extract fields with fallbacks
-            title = data.get("title", "")
-            originaltitle = data.get("title", "")
-            uniqueid = data.get("id", "")
+            title = _text(data.get("title", ""))
+            originaltitle = _text(data.get("title", ""))
+            uniqueid = _text(data.get("id", ""))
             premiered = ""
 
             if "upload_date" in data and len(data["upload_date"]) == 8:
                 premiered = f"{data['upload_date'][:4]}-{data['upload_date'][4:6]}-{data['upload_date'][6:]}"
 
             userrating = 0
-            thumb = data.get("thumbnail", "")
-            genres = data.get("categories", [])
-            tags = data.get("tags", [])
-            actors = data.get("uploader", "")
+            thumb = _text(data.get("thumbnail", ""))
+            genres = data.get("categories") or []
+            tags = data.get("tags") or []
+            uploader = data.get("uploader")
 
-            # Build XML
-            nfo = [
-                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-                "<movie>",
-                f"    <title>{title}</title>",
-                f"    <originaltitle>{originaltitle}</originaltitle>",
-                f'    <uniqueid type="home" default="true">{uniqueid}</uniqueid>',
-                f"    <premiered>{premiered}</premiered>",
-                f"    <userrating>{userrating}</userrating>",
-                f"    <thumb>{thumb}</thumb>",
-            ]
+            # Build XML safely (escapes &, <, > automatically)
+            movie = ET.Element("movie")
+            ET.SubElement(movie, "title").text = title
+            ET.SubElement(movie, "originaltitle").text = originaltitle
+            uniqueid_el = ET.SubElement(
+                movie, "uniqueid", {"type": "home", "default": "true"}
+            )
+            uniqueid_el.text = uniqueid
+            if premiered:
+                ET.SubElement(movie, "premiered").text = premiered
+            ET.SubElement(movie, "userrating").text = str(userrating)
+            if thumb:
+                ET.SubElement(movie, "thumb").text = thumb
 
-            for genre in genres:
-                nfo.append(f"    <genre>{genre}</genre>")
+            if isinstance(genres, (list, tuple)):
+                for genre in genres:
+                    g = _text(genre).strip()
+                    if g:
+                        ET.SubElement(movie, "genre").text = g
+            else:
+                g = _text(genres).strip()
+                if g:
+                    ET.SubElement(movie, "genre").text = g
 
-            for tag in tags:
-                nfo.append(f"    <tag>{tag}</tag>")
+            if isinstance(tags, (list, tuple)):
+                for tag in tags:
+                    t = _text(tag).strip()
+                    if t:
+                        ET.SubElement(movie, "tag").text = t
+            else:
+                t = _text(tags).strip()
+                if t:
+                    ET.SubElement(movie, "tag").text = t
 
-            # Actor block
-            if actors:
-                nfo.append("    <actor>")
-                nfo.append(f"        <name>{actors}</name>")
-                nfo.append("        <order>1</order>")
-                nfo.append("    </actor>")
-            nfo.append("</movie>")
+            # Represent uploader as actor(s)
+            uploader_names: list[str] = []
+            if isinstance(uploader, (list, tuple)):
+                uploader_names = [u for u in (_text(v).strip() for v in uploader) if u]
+            else:
+                u = _text(uploader).strip()
+                if u:
+                    uploader_names = [u]
 
-            nfo_content = "\n".join(nfo)
+            for idx, name in enumerate(uploader_names, start=1):
+                actor_el = ET.SubElement(movie, "actor")
+                ET.SubElement(actor_el, "name").text = name
+                ET.SubElement(actor_el, "order").text = str(idx)
+
+            tree = ET.ElementTree(movie)
+            # Pretty print when available (Python 3.9+)
+            try:
+                ET.indent(tree, space="    ", level=0)
+            except Exception:
+                pass
+
             nfo_path = json_file.with_suffix(".nfo")
 
             with open(nfo_path, "w", encoding="utf-8") as nfo_file:
-                nfo_file.write(nfo_content)
+                tree.write(nfo_file, encoding="unicode", xml_declaration=True)
 
             # remove the original JSON file
             json_file.unlink()
