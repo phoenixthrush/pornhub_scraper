@@ -4,6 +4,12 @@ from pathlib import Path
 
 from common import cleanup_partial_downloads
 
+# ======================
+# Configuration
+# ======================
+MOUNTPOINT = Path("mountpoint")
+LINKS_FILE = MOUNTPOINT / "links.txt"
+
 
 def upgrade_yt_dlp():
     """Upgrading yt-dlp"""
@@ -11,28 +17,26 @@ def upgrade_yt_dlp():
 
 
 def sort_links():
-    """Sorting links"""
-    with open("mountpoint/links.txt", "r") as file:
+    """Sorting links by artist name"""
+    with LINKS_FILE.open("r", encoding="utf-8") as file:
         lines = file.readlines()
 
-        # Sort lines by artist name (first capture group)
-        lines = sorted(
-            lines,
-            key=lambda x: (
-                re.match(r'"([^"]+)"\s+', x).group(1)
-                if re.match(r'"([^"]+)"\s+', x)
-                else ""
-            ),
-        )
+    lines = sorted(
+        lines,
+        key=lambda x: (
+            re.match(r'"([^"]+)"\s+', x).group(1)
+            if re.match(r'"([^"]+)"\s+', x)
+            else ""
+        ),
+    )
 
-    with open("mountpoint/links.txt", "w") as file:
+    with LINKS_FILE.open("w", encoding="utf-8") as file:
         file.writelines(lines)
 
 
 def download_videos():
-    """Downloading videos"""
-    archive_path = str((Path("mountpoint") / "downloaded.txt").resolve())
-    with open("mountpoint/links.txt", "r") as file:
+    """Downloading videos with per-artist archive"""
+    with LINKS_FILE.open("r", encoding="utf-8") as file:
         for line in file:
             stripped = line.strip()
 
@@ -41,34 +45,37 @@ def download_videos():
 
             match = re.match(r'"([^"]+)"\s+(https?://\S+)', stripped)
 
-            if match:
-                artist_name = match.group(1)
-                url = match.group(2)
+            if not match:
+                continue
 
-                folder_path = Path("mountpoint") / artist_name
-                folder_path.mkdir(parents=True, exist_ok=True)
+            artist_name = match.group(1)
+            url = match.group(2)
 
-                print(f"Created folder: {folder_path}")
+            # Create artist folder
+            folder_path = MOUNTPOINT / artist_name
+            folder_path.mkdir(parents=True, exist_ok=True)
 
-                subprocess.run(
-                    [
-                        "yt-dlp",
-                        "--download-archive",
-                        archive_path,
-                        "--ignore-errors",
-                        "--no-warnings",
-                        "--referer",  # currently needed #15827
-                        "https://www.pornhub.com/",
-                        "-o",
-                        "%(id)s.%(ext)s",
-                        # "--postprocessor-args",
-                        # "ffmpeg:-c:v libx265 -preset veryslow",
-                        "--embed-metadata",  # somehow does not work?
-                        "--embed-thumbnail",
-                        url,
-                    ],
-                    cwd=folder_path,
-                )
+            print(f"Using folder: {folder_path}")
+
+            archive_path = str((folder_path / "downloaded.txt").resolve())
+
+            subprocess.run(
+                [
+                    "yt-dlp",
+                    "--download-archive",
+                    archive_path,
+                    "--ignore-errors",
+                    "--no-warnings",
+                    "--referer",
+                    "https://www.pornhub.com/",
+                    "-o",
+                    "%(id)s.%(ext)s",
+                    "--embed-metadata",
+                    "--embed-thumbnail",
+                    url,
+                ],
+                cwd=folder_path,
+            )
 
 
 def main():
