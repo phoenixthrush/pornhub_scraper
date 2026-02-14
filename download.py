@@ -8,7 +8,7 @@ from common import cleanup_partial_downloads
 # Configuration
 # ======================
 MOUNTPOINT = Path("mountpoint")
-LINKS_FILE = MOUNTPOINT / "links.txt"
+LINKS_FILE = MOUNTPOINT / "_links.txt"
 
 
 def upgrade_yt_dlp():
@@ -57,7 +57,7 @@ def download_videos():
 
             print(f"Using folder: {folder_path}")
 
-            archive_path = str((folder_path / "downloaded.txt").resolve())
+            archive_path = str((folder_path / "_downloaded.txt").resolve())
 
             subprocess.run(
                 [
@@ -72,6 +72,7 @@ def download_videos():
                     "%(id)s.%(ext)s",
                     "--embed-metadata",
                     "--embed-thumbnail",
+                    "--no-overwrites",
                     url,
                 ],
                 cwd=folder_path,
