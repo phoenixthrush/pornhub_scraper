@@ -7,7 +7,7 @@ from common import cleanup_partial_downloads
 # ======================
 # Configuration
 # ======================
-MOUNTPOINT = Path("mountpoint")
+MOUNTPOINT = Path("..")
 LINKS_FILE = MOUNTPOINT / "_links.txt"
 
 
