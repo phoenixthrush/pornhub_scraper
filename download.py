@@ -13,7 +13,9 @@ LINKS_FILE = MOUNTPOINT / "_links.txt"
 
 def upgrade_yt_dlp():
     """Upgrading yt-dlp"""
-    subprocess.run(["pip", "install", "--upgrade", "yt-dlp"])
+    subprocess.run(
+        ["pip", "install", "--upgrade", "yt-dlp", "curl-cffi"]
+    )  # cffi needed: #16860
 
 
 def sort_links():
@@ -66,8 +68,6 @@ def download_videos():
                     archive_path,
                     "--ignore-errors",
                     "--no-warnings",
-                    "--referer",
-                    "https://www.pornhub.com/",
                     "-o",
                     "%(id)s.%(ext)s",
                     "--embed-metadata",
