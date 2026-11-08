@@ -37,6 +37,7 @@ ARCHIVE_RECORD = re.compile(r"pornhub\s+([A-Za-z0-9_-]+)", re.IGNORECASE)
 SOURCE_ID = re.compile(rb"(?:viewkey=|/video/)([A-Za-z0-9_-]+)")
 BOX = struct.Struct(">I4s")
 MAX_SIDECAR_BYTES = 2_000_000
+PROGRESS_INTERVAL = 100
 METADATA_CHILDREN = {
     b"moov": {b"udta", b"meta"},
     b"udta": {b"meta"},
@@ -229,10 +230,14 @@ def audit(root):
     def walk_error(error):
         note("unreadable directory", Path(error.filename or root), str(error))
 
+    print("Checking download links in _links.txt...", flush=True)
     audit_links(root, note, totals)
     checkout = Path(__file__).resolve().parent
     for directory, dirs, files in os.walk(root, onerror=walk_error):
         parent = Path(directory)
+        relative = parent.relative_to(root)
+        totals["folders"] += 1
+        print(f"Scanning {relative} ({len(files):,} file entries)...", flush=True)
         dirs.sort()
         for name in dirs[:]:
             path = parent / name
@@ -250,7 +255,12 @@ def audit(root):
                 dirs.remove(name)
                 note("symlink directory skipped", path)
 
-        for name in sorted(files):
+        for scanned, name in enumerate(sorted(files)):
+            if scanned and scanned % PROGRESS_INTERVAL == 0:
+                print(
+                    f"  {relative}: scanned {scanned:,}/{len(files):,} entries",
+                    flush=True,
+                )
             path = parent / name
             try:
                 attrs = path.lstat()
@@ -302,6 +312,10 @@ def audit(root):
             elif path != root / "_links.txt":
                 note("unexpected file", path)
 
+    print(
+        f"Comparing {totals['archive records']:,} archive records with {totals['videos']:,} videos...",
+        flush=True,
+    )
     all_ids = {identifier for folder in videos.values() for identifier in folder}
     for folder, ids in archives.items():
         if ids is None:
@@ -326,6 +340,7 @@ def audit(root):
                 for path in paths:
                     note("unarchived video", path)
 
+    print(f"Checking {len(sidecars):,} images and metadata sidecars...", flush=True)
     for path in sidecars:
         suffix = path.suffix.lower()
         name = path.name
@@ -351,7 +366,6 @@ def audit(root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("library", type=Path, nargs="?")
-    parser.add_argument("--details", action="store_true", help="show paths and details")
     args = parser.parse_args()
     try:
         root = (args.library or LIBRARY_ROOT).resolve(strict=True)
@@ -361,16 +375,17 @@ def main():
             raise FileNotFoundError(
                 f"{root / '_links.txt'} is missing. Pass the library path explicitly."
             )
+        print(f"Library: {root}", flush=True)
         totals, issues = audit(root)
     except (OSError, RuntimeError) as error:
         print(f"Cannot audit library: {error}", file=sys.stderr)
         return 2
 
-    print(f"Library: {root}")
+    print("\nSummary")
     for label in (
+        "folders",
         "files",
         "videos",
-        "headers checked",
         "archives",
         "archive records",
         "download links",
@@ -379,19 +394,30 @@ def main():
         "images",
         "metadata sidecars",
     ):
-        print(f"{label}: {totals[label]}")
-    print(f"Findings: {sum(map(len, issues.values()))}")
+        print(f"  {label}: {totals[label]:,}")
+    failed_headers = len(issues.get("invalid or unreadable video header", ()))
+    passed_headers = totals["headers checked"]
+    skipped_headers = totals["videos"] - passed_headers - failed_headers
+    print(
+        f"  video headers: {passed_headers:,} passed, {failed_headers:,} failed, "
+        f"{skipped_headers:,} skipped"
+    )
+
+    print(f"Findings: {sum(map(len, issues.values())):,}")
     for kind, findings in sorted(issues.items()):
-        print(f"  {kind}: {len(findings)}")
-        if args.details:
-            for path, detail in findings:
-                display = path.relative_to(root) if path.is_relative_to(root) else path
-                suffix = f" ({detail})" if detail else ""
-                print(f"    {display}{suffix}")
+        print(f"  {kind}: {len(findings):,}")
+        for path, detail in findings:
+            display = path.relative_to(root) if path.is_relative_to(root) else path
+            suffix = f" ({detail})" if detail else ""
+            print(f"    {display}{suffix}")
     if "unreadable directory" in issues and not totals["files"]:
         return 2
     return int(bool(issues))
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nAudit interrupted.", file=sys.stderr)
+        raise SystemExit(130) from None
