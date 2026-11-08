@@ -1,96 +1,89 @@
-import re
 import subprocess
-from pathlib import Path
+import sys
+from fcntl import LOCK_EX, LOCK_NB, flock
 
-from common import cleanup_partial_downloads
-
-# ======================
-# Configuration
-# ======================
-MOUNTPOINT = Path("..")
-LINKS_FILE = MOUNTPOINT / "_links.txt"
+from common import LIBRARY_ROOT, LINK, artist_folder, cleanup_partial_downloads
 
 
 def upgrade_yt_dlp():
-    """Upgrading yt-dlp"""
-    subprocess.run(
-        ["pip", "install", "--upgrade", "yt-dlp", "curl-cffi"]
-    )  # cffi needed: #16860
-
-
-def sort_links():
-    """Sorting links by artist name"""
-    with LINKS_FILE.open("r", encoding="utf-8") as file:
-        lines = file.readlines()
-
-    lines = sorted(
-        lines,
-        key=lambda x: (
-            re.match(r'"([^"]+)"\s+', x).group(1)
-            if re.match(r'"([^"]+)"\s+', x)
-            else ""
-        ),
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp", "curl-cffi"],
+        check=False,
     )
+    if result.returncode:
+        print(
+            "Could not upgrade yt-dlp. Trying the installed version.", file=sys.stderr
+        )
 
-    with LINKS_FILE.open("w", encoding="utf-8") as file:
-        file.writelines(lines)
 
+def download_videos(links):
+    failed = False
+    for artist_name, url in links:
+        try:
+            folder = artist_folder(LIBRARY_ROOT, artist_name)
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            failed = True
+            continue
 
-def download_videos():
-    """Downloading videos with per-artist archive"""
-    with LINKS_FILE.open("r", encoding="utf-8") as file:
-        for line in file:
-            stripped = line.strip()
-
-            if not stripped or stripped.startswith("#"):
-                continue
-
-            match = re.match(r'"([^"]+)"\s+(https?://\S+)', stripped)
-
-            if not match:
-                continue
-
-            artist_name = match.group(1)
-            url = match.group(2)
-
-            # Create artist folder
-            folder_path = MOUNTPOINT / artist_name
-            folder_path.mkdir(parents=True, exist_ok=True)
-
-            print(f"Using folder: {folder_path}")
-
-            archive_path = str((folder_path / "_downloaded.txt").resolve())
-
-            subprocess.run(
-                [
-                    "yt-dlp",
-                    "--download-archive",
-                    archive_path,
-                    "--ignore-errors",
-                    "--no-warnings",
-                    "-o",
-                    "%(id)s.%(ext)s",
-                    "--embed-metadata",
-                    "--embed-thumbnail",
-                    "--no-overwrites",
-                    url,
-                ],
-                cwd=folder_path,
+        folder.mkdir(parents=True, exist_ok=True)
+        print(f"Using folder: {folder}")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "yt_dlp",
+                "--download-archive",
+                "_downloaded.txt",
+                "--no-abort-on-error",
+                "-o",
+                "%(id)s.%(ext)s",
+                "--embed-metadata",
+                "--embed-thumbnail",
+                "--no-overwrites",
+                url,
+            ],
+            cwd=folder,
+            check=False,
+        )
+        if result.returncode:
+            print(
+                f"yt-dlp exited with status {result.returncode}: {folder}",
+                file=sys.stderr,
             )
+            failed = True
+        else:
+            cleanup_partial_downloads(folder)
+    return int(failed)
 
 
 def main():
     try:
-        upgrade_yt_dlp()
-        sort_links()
-        download_videos()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        cleanup_partial_downloads()
+        with (LIBRARY_ROOT / "_links.txt").open(encoding="utf-8") as links_file:
+            try:
+                flock(links_file, LOCK_EX | LOCK_NB)
+            except BlockingIOError:
+                print("Another download run is active.", file=sys.stderr)
+                return 1
 
-    print("Quitting...")
+            links = [
+                match.groups()
+                for line in links_file
+                if (match := LINK.match(line.strip()))
+            ]
+            links.sort(key=lambda link: link[0])
+            if not links:
+                print("No download links found.", file=sys.stderr)
+                return 1
+
+            upgrade_yt_dlp()
+            return download_videos(links)
+    except FileNotFoundError as error:
+        print(error, file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
